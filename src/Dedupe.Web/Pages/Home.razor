@@ -1,0 +1,306 @@
+@inject AppState State
+
+<main class="wrap">
+    <header class="top">
+        <div class="brand">
+            <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="12" height="14" rx="2" /><path d="M9 3h10a2 2 0 0 1 2 2v12" /><path d="M6 10h6M6 14h4" /></svg></span>
+            <div>
+                <h1>Ticket deduper</h1>
+                <p class="sub">Find the earlier ticket that already answers a new one.</p>
+            </div>
+        </div>
+        <span class="pill" title="Word matching, not a real embedding model">Stand-in model</span>
+    </header>
+
+    <details class="about">
+        <summary>How this works, and what it can't do</summary>
+        <p>Each past ticket is cleaned (quoted replies, signatures and order numbers removed), turned into a vector and stored with its product, status and date. A new ticket is cleaned the same way and compared with the stored ones, with your filters applied first. It only suggests: it never merges tickets or sends the reply. The embedder here matches words, not meaning, and the 100 tickets are invented and tidier than real ones, so the accuracy figures are best read as a demonstration of the method. Nothing leaves your browser.</p>
+    </details>
+
+    @if (finder is null)
+    {
+        <p class="muted" role="status">Indexing the tickets&hellip;</p>
+    }
+    else
+    {
+        <div class="tabs" role="tablist" aria-label="Views">
+            @foreach (var (id, label) in Tabs)
+            {
+                var tabId = id;
+                <button type="button" role="tab" class="tab @(tab == tabId ? "on" : "")" aria-selected="@(tab == tabId)" @onclick="() => tab = tabId">@label</button>
+            }
+        </div>
+
+        @if (tab == "find")
+        {
+            <section class="step" aria-labelledby="s1">
+                <h2 id="s1"><span class="n">1</span>Describe a new ticket</h2>
+                <div class="presets" role="group" aria-label="Examples">
+                    <span class="muted">Try an example</span>
+                    @foreach (var demo in SampleTickets.Demos)
+                    {
+                        var chosen = demo;
+                        <button type="button" class="chip @(selected == chosen ? "on" : "")" @onclick="() => UseDemo(chosen)">@chosen.Label</button>
+                    }
+                </div>
+                @if (selected is not null)
+                {
+                    <p class="muted small note">@selected.Note</p>
+                }
+
+                <div class="field">
+                    <label for="subj">Subject</label>
+                    <input id="subj" type="text" maxlength="200" @bind="subject" @bind:event="oninput" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label for="body">Message</label>
+                    <textarea id="body" rows="7" maxlength="20000" spellcheck="false" @bind="body" @bind:event="oninput"></textarea>
+                </div>
+
+                <div class="filters" role="group" aria-label="Filters">
+                    <label>Product
+                        <select @bind="product">
+                            <option value="">Any</option>
+                            @foreach (var p in SampleTickets.Products)
+                            {
+                                <option value="@p">@p</option>
+                            }
+                        </select>
+                    </label>
+                    <label>Look back
+                        <select @bind="within">
+                            <option value="">Any time</option>
+                            <option value="30">30 days</option>
+                            <option value="60">60 days</option>
+                            <option value="90">90 days</option>
+                        </select>
+                    </label>
+                    <label class="check"><input type="checkbox" @bind="resolvedOnly" /> Resolved tickets only</label>
+                </div>
+
+                <div class="actions">
+                    <button type="button" class="primary" @onclick="Find" disabled="@busy">Find similar tickets</button>
+                    <span class="muted small">Dates are counted from @SampleTickets.DemoNow.ToString("d MMM yyyy"), the sample's "today".</span>
+                </div>
+            </section>
+
+            @if (result is not null)
+            {
+                <section class="step" aria-labelledby="s2" aria-live="polite">
+                    <h2 id="s2"><span class="n">2</span>Similar past tickets <span class="count">searched @result.IndexSize &middot; @result.Matches.Count found</span></h2>
+
+                    @if (result.Matches.Count == 0)
+                    {
+                        <p class="empty">Nothing in the history is close enough (the related line is @finder.Options.RelatedThreshold.ToString("0.00")). Treat it as a new problem.</p>
+                    }
+
+                    @foreach (var m in result.Matches)
+                    {
+                        <article class="card @(m.Verdict == Verdict.Duplicate ? "dup" : "rel")">
+                            <div class="row">
+                                <code>@m.Ticket.Id</code>
+                                <span class="tag">@m.Ticket.Product</span>
+                                <span class="tag @(m.Ticket.Status == TicketStatus.Resolved ? "ok" : "warn")">@m.Ticket.Status</span>
+                                <span class="verdict @(m.Verdict == Verdict.Duplicate ? "dup" : "rel")">@(m.Verdict == Verdict.Duplicate ? "Likely duplicate" : "Related")</span>
+                                <span class="muted small push">@m.Ticket.CreatedAt.ToString("d MMM yyyy")</span>
+                            </div>
+                            <p class="subject">@m.Ticket.Subject</p>
+                            <div class="meta">
+                                <span class="meter" role="img" aria-label="Similarity @m.Score.ToString("0.00")">
+                                    <i style="width:@Scale(m.Score)%"></i>
+                                    <b class="tick" style="left:@Scale(finder.Options.RelatedThreshold)%" title="related threshold"></b>
+                                    <b class="tick dup" style="left:@Scale(finder.Options.DuplicateThreshold)%" title="duplicate threshold"></b>
+                                </span>
+                                <span class="score">@m.Score.ToString("0.00")</span>
+                            </div>
+                            @if (m.Ticket.Status == TicketStatus.Resolved && !string.IsNullOrWhiteSpace(m.Ticket.Resolution))
+                            {
+                                <p class="fix"><span class="muted">How it was fixed:</span> @m.Ticket.Resolution</p>
+                            }
+                        </article>
+                    }
+
+                    @if (result.Matches.Count > 0)
+                    {
+                        <p class="muted small">The bar runs from 0 to 0.8. The two ticks are the related and duplicate lines, chosen on a development set (see "How well it works").</p>
+                    }
+
+                    @if (result.DraftReply is not null)
+                    {
+                        <h3 class="sub-h">Suggested reply <span class="muted small">draft, never sent</span></h3>
+                        <pre class="out">@result.DraftReply</pre>
+                        <p class="muted small">Built only from the tickets above. An agent edits it before anything goes out.</p>
+                    }
+
+                    <details class="about">
+                        <summary>What the model saw</summary>
+                        <p class="mono small">@(result.CleanedText.Length == 0 ? "(nothing usable)" : result.CleanedText)</p>
+                    </details>
+                </section>
+            }
+        }
+        else if (tab == "eval")
+        {
+            var r = State.Report;
+            <section class="step" aria-labelledby="e1">
+                <h2 id="e1"><span class="n">1</span>The thresholds, and the proof</h2>
+                <p class="muted">Every third duplicate group, and every third one-off ticket, is held out as a test set (@r.TestTickets tickets). The word weights and both thresholds come from the other @r.DevTickets. The numbers below are measured on the held-out tickets.</p>
+
+                <div class="cards">
+                    <div class="stat">
+                        <span class="eyebrow">Duplicate threshold</span>
+                        <b>@r.DuplicateThreshold.ToString("0.00")</b>
+                        <p>Lowest score where at least 95% of pairs called duplicates were right, on the development tickets. @(r.PrecisionTargetMet ? "" : "The target could not be met, so the best F1 was used.")</p>
+                        <p class="result">Held out: <b>@Pct(r.TestAtDuplicate.Precision)</b> correct, <b>@Pct(r.TestAtDuplicate.Recall)</b> of real duplicate pairs found (@r.TestAtDuplicate.TruePositives of @r.TestDuplicatePairs, with @r.TestAtDuplicate.FalsePositives wrong).</p>
+                    </div>
+                    <div class="stat">
+                        <span class="eyebrow">Related threshold</span>
+                        <b>@r.RelatedThreshold.ToString("0.00")</b>
+                        <p>Highest score that still finds 90% of real duplicates on the development tickets, so a helpful ticket is rarely hidden.</p>
+                        <p class="result">Held out: <b>@Pct(r.TestAtRelated.Recall)</b> of real duplicate pairs found, <b>@Pct(r.TestAtRelated.Precision)</b> of what it flags is a true duplicate (@r.TestAtRelated.FalsePositives extra).</p>
+                    </div>
+                    <div class="stat">
+                        <span class="eyebrow">Does the right ticket rank first?</span>
+                        <b>@Pct(r.HitAt1)</b>
+                        <p>For each of @r.RankedQueries held-out tickets that has a duplicate among the others, is its nearest neighbour a true duplicate? Top three: @Pct(r.HitAt3). Mean reciprocal rank: @r.Mrr.ToString("0.00").</p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="step" aria-labelledby="e2">
+                <h2 id="e2"><span class="n">2</span>Every threshold</h2>
+                <p class="muted small">Precision is the share of "duplicate" pairs that are real. Recall is the share of real duplicate pairs found. Raising the threshold trades recall for precision.</p>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Threshold</th><th>Dev precision</th><th>Dev recall</th><th>Test precision</th><th>Test recall</th></tr></thead>
+                        <tbody>
+                            @foreach (var i in Enumerable.Range(0, 21).Select(x => x * 5))
+                            {
+                                var d = r.DevSweep[i];
+                                var t = r.TestSweep[i];
+                                <tr class="@(Math.Abs(d.Threshold - r.DuplicateThreshold) < 0.026 ? "hl" : "")">
+                                    <td class="mono">@d.Threshold.ToString("0.00")</td>
+                                    <td>@Bar(d.TruePositives + d.FalsePositives == 0 ? null : d.Precision)</td>
+                                    <td>@Bar(d.Recall)</td>
+                                    <td>@Bar(t.TruePositives + t.FalsePositives == 0 ? null : t.Precision)</td>
+                                    <td>@Bar(t.Recall)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="muted small">A dash means nothing was called a duplicate at that threshold, so precision has no value. The highlighted row is nearest the duplicate threshold.</p>
+            </section>
+
+            <section class="step" aria-labelledby="e3">
+                <h2 id="e3"><span class="n">3</span>Where it gets it wrong</h2>
+                <h3 class="sub-h">Wrongly called duplicates (held out)</h3>
+                @if (r.FalsePositives.Count == 0)
+                {
+                    <p class="empty">None at the duplicate threshold. On the development tickets there were some at lower thresholds, which is what the table above shows.</p>
+                }
+
+                @foreach (var e in r.FalsePositives)
+                {
+                    <article class="card"><p class="subject">@e.IdA "@e.SubjectA" and @e.IdB "@e.SubjectB" <span class="score">@e.Score.ToString("0.00")</span></p></article>
+                }
+
+                <h3 class="sub-h">Real duplicates it missed (held out, weakest first)</h3>
+                @foreach (var e in r.FalseNegatives)
+                {
+                    <article class="card"><p class="subject">@e.IdA "@e.SubjectA" and @e.IdB "@e.SubjectB" <span class="score">@e.Score.ToString("0.00")</span></p></article>
+                }
+
+                <p class="muted small">These are mostly different words for the same thing ("verification code" and "authenticator codes"). Word matching cannot see that; a real embedding model would help. The evaluation here would still choose its thresholds and report its mistakes the same way.</p>
+            </section>
+        }
+        else
+        {
+            <section class="step" aria-labelledby="h1">
+                <h2 id="h1"><span class="n">1</span>The 100 sample tickets</h2>
+                <p class="muted small">Invented for this demo: 20 recurring problems with four reports each, and 20 one-off questions. The group column is the answer key the evaluation uses.</p>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Id</th><th>Product</th><th>Status</th><th>Subject</th><th>Group</th></tr></thead>
+                        <tbody>
+                            @foreach (var t in SampleTickets.All)
+                            {
+                                <tr>
+                                    <td class="mono">@t.Id</td>
+                                    <td>@t.Product</td>
+                                    <td>@t.Status</td>
+                                    <td>@t.Subject</td>
+                                    <td class="mono muted">@(t.GroupId ?? "one-off")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+    }
+
+    <footer class="foot">
+        <a href="https://github.com/hamzamehmood46/ticket-dedupe-dotnet" target="_blank" rel="noopener">Source on GitHub</a>
+        <span class="muted"> &middot; The tickets are made up and nothing leaves your browser.</span>
+    </footer>
+</main>
+
+@code {
+    private static readonly (string Id, string Label)[] Tabs =
+    [
+        ("find", "Find similar tickets"),
+        ("eval", "How well it works"),
+        ("history", "The 100 tickets"),
+    ];
+
+    private DuplicateFinder? finder;
+    private string tab = "find";
+    private SampleTickets.Demo? selected;
+    private string subject = "";
+    private string body = "";
+    private string product = "";
+    private string within = "";
+    private bool resolvedOnly;
+    private bool busy;
+    private FindResult? result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        finder = await State.GetFinderAsync();
+        await UseDemo(SampleTickets.Demos[0]);
+    }
+
+    private async Task UseDemo(SampleTickets.Demo demo)
+    {
+        selected = demo;
+        subject = demo.Ticket.Subject;
+        body = demo.Ticket.Body;
+        await Find();
+    }
+
+    private async Task Find()
+    {
+        if (finder is null)
+        {
+            return;
+        }
+
+        busy = true;
+        var filters = new SearchFilters(
+            string.IsNullOrEmpty(product) ? null : product,
+            resolvedOnly,
+            int.TryParse(within, out var days) ? days : null);
+        result = await finder.FindAsync(new NewTicket(subject, body, SampleTickets.DemoNow), filters);
+        busy = false;
+    }
+
+    // The score bar and its two ticks run from 0 to 0.8, so typical scores fill a useful part of the bar.
+    private static string Scale(double score) => Math.Min(100, score / 0.8 * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Pct(double x) => (x * 100).ToString("0") + "%";
+
+    private static Microsoft.AspNetCore.Components.MarkupString Bar(double? value) => value is null
+        ? new("<span class=\"muted\">&ndash;</span>")
+        : new($"<span class=\"pbar\"><i style=\"width:{(value.Value * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture)}%\"></i></span><span class=\"pnum\">{(value.Value * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture)}%</span>");
+}

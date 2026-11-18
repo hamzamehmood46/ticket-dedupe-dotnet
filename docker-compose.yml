@@ -1,0 +1,15 @@
+﻿# A local Postgres with the pgvector extension, for trying src/Dedupe.PgVector.
+# The adapter's SQL is tested with a fake in this repository, but it has not been run against this container.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: tickets
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
